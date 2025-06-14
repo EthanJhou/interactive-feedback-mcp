@@ -18,6 +18,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QSettings
 from PySide6.QtGui import QTextCursor, QIcon, QKeyEvent, QFont, QFontDatabase, QPalette, QColor
 
+DEFAULT_TIMEOUT_MESSAGE = "用戶無回應，請繼續"
+FEEDBACK_TIMEOUT_MS = 10 * 60 * 1000  # 10 分鐘（單位：毫秒）
+
 class FeedbackResult(TypedDict):
     command_logs: str
     interactive_feedback: str
@@ -376,6 +379,12 @@ class FeedbackUI(QMainWindow):
         feedback_layout.addWidget(self.feedback_text)
         feedback_layout.addWidget(submit_button)
 
+        # Countdown label
+        self.countdown_label = QLabel()
+        self.countdown_label.setStyleSheet("color: #aaaaaa; font-size: 10pt;")
+        feedback_layout.addWidget(self.countdown_label)
+
+
         # Set minimum height for feedback_group to accommodate its contents
         # This will be based on the description label and the 5-line feedback_text
         self.feedback_group.setMinimumHeight(self.description_label.sizeHint().height() + self.feedback_text.minimumHeight() + submit_button.sizeHint().height() + feedback_layout.spacing() * 2 + feedback_layout.contentsMargins().top() + feedback_layout.contentsMargins().bottom() + 10) # 10 for extra padding
@@ -393,6 +402,27 @@ class FeedbackUI(QMainWindow):
         # contact_label.setFont(contact_label_font)
         contact_label.setStyleSheet("font-size: 9pt; color: #cccccc;") # Light gray for dark theme
         layout.addWidget(contact_label)
+
+        # --- Add inactivity timeout for feedback input ---
+        self.feedback_timeout_timer = QTimer()
+        self.feedback_timeout_timer.setInterval(FEEDBACK_TIMEOUT_MS)
+        self.feedback_timeout_timer.setSingleShot(True)
+        self.feedback_timeout_timer.timeout.connect(self._handle_feedback_timeout)
+
+        # 設置倒數邏輯
+        self.remaining_seconds = FEEDBACK_TIMEOUT_MS // 1000
+        self.countdown_timer = QTimer()
+        self.countdown_timer.setInterval(1000)  # 每秒更新一次
+        self.countdown_timer.timeout.connect(self._update_countdown)
+        self.countdown_timer.start()
+
+        self.feedback_timeout_timer = QTimer()
+        self.feedback_timeout_timer.setInterval(FEEDBACK_TIMEOUT_MS)
+        self.feedback_timeout_timer.setSingleShot(True)
+        self.feedback_timeout_timer.timeout.connect(self._handle_feedback_timeout)
+
+        self.feedback_text.textChanged.connect(self._restart_feedback_timer)
+        self._restart_feedback_timer()
 
     def _toggle_command_section(self):
         is_visible = self.command_group.isVisible()
@@ -542,6 +572,26 @@ class FeedbackUI(QMainWindow):
             return FeedbackResult(logs="".join(self.log_buffer), interactive_feedback="")
 
         return self.feedback_result
+
+    def _handle_feedback_timeout(self):
+        if not self.feedback_text.toPlainText().strip():
+            self.feedback_text.setPlainText(DEFAULT_TIMEOUT_MESSAGE)
+            self._submit_feedback()
+
+    def _update_countdown(self):
+        if self.remaining_seconds > 0:
+            self.remaining_seconds -= 1
+            mins, secs = divmod(self.remaining_seconds, 60)
+            self.countdown_label.setText(f"自動送出倒數：{mins:02d}:{secs:02d}")
+        else:
+            self.countdown_timer.stop()
+            self.countdown_label.setText("即將自動送出...")
+
+    def _restart_feedback_timer(self):
+        self.remaining_seconds = FEEDBACK_TIMEOUT_MS // 1000
+        self.feedback_timeout_timer.start()
+        if not self.countdown_timer.isActive():
+            self.countdown_timer.start()
 
 def get_project_settings_group(project_dir: str) -> str:
     # Create a safe, unique group name from the project directory path
